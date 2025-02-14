@@ -1,25 +1,24 @@
 ---
 title: Diagrams
-date: 2022-02-20
+description: Use fenced code blocks and Markdown render hooks to include diagrams in your content.
 categories: [content management]
 keywords: [diagrams,drawing]
 menu:
   docs:
-    parent: "content-management"
-    weight: 22
-weight: 22
+    parent: content-management
+    weight: 260
+weight: 260
 toc: true
 ---
 
+## GoAT diagrams (ASCII)
 
-{{< new-in "0.93.0" >}}
+Hugo natively supports [GoAT] diagrams with an [embedded code block render hook]. This means that this code block:
 
+[GoAT]: https://github.com/bep/goat
+[embedded code block render hook]: {{% eturl render-codeblock-goat %}}
 
-## GoAT Diagrams (Ascii)
-
-Hugo! supports [GoAT](https://github.com/bep/goat) natively. This means that this code block:
-
-````
+````txt
 ```goat
       .               .                .               .--- 1          .-- 1     / 1
      / \              |                |           .---+            .-+         +
@@ -45,28 +44,25 @@ Will be rendered as:
      1   2 3   4    1   2   3   4    1   2   3   4         '--- 4          '-- 4     \ 4
 ```
 
+## Mermaid diagrams
 
+Hugo does not provide a built-in template for Mermaid diagrams. Create your own using a [code block render hook]:
 
+[code block render hook]: /render-hooks/code-blocks/
 
-
-## Mermaid Diagrams
-
-Hugo currently does not provide default templates for Mermaid diagrams. But you can easily add your own. One way to do it would be to create ` layouts/_default/_markup/render-codeblock-mermaid.html`:
-
-
-```go-html-template
-<div class="mermaid">
-  {{- .Inner | safeHTML }}
-</div>
+{{< code file=layouts/_default/_markup/render-codeblock-mermaid.html >}}
+<pre class="mermaid">
+  {{- .Inner | htmlEscape | safeHTML }}
+</pre>
 {{ .Page.Store.Set "hasMermaid" true }}
-```
+{{< /code >}}
 
-And then include this snippet at the bottom of the content template (below `.Content`):
+And then include this snippet at the bottom of the content template:
 
 ```go-html-template
-{{ if .Page.Store.Get "hasMermaid" }}
-  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-  <script>
+{{ if .Store.Get "hasMermaid" }}
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.esm.min.mjs';
     mermaid.initialize({ startOnLoad: true });
   </script>
 {{ end }}
@@ -74,6 +70,7 @@ And then include this snippet at the bottom of the content template (below `.Con
 
 With that you can use the `mermaid` language in Markdown code blocks:
 
+````text
 ```mermaid
 sequenceDiagram
     participant Alice
@@ -87,10 +84,9 @@ sequenceDiagram
     John->>Bob: How about you?
     Bob-->>John: Jolly good!
 ```
+````
 
-
-
-## Goat Ascii Diagram Examples
+## Goat ASCII diagram examples
 
 ### Graphics
 
@@ -160,7 +156,7 @@ sequenceDiagram
 
 ### File tree
 
-Created from https://arthursonzogni.com/Diagon/#Tree
+Created from <https://arthursonzogni.com/Diagon/#Tree>
 
 ```goat  { width=300  color="orange" }
 ───Linux─┬─Android
@@ -173,10 +169,9 @@ Created from https://arthursonzogni.com/Diagon/#Tree
          └─Fedora
 ```
 
+### Sequence diagram
 
-### Sequence Diagram
-
-https://arthursonzogni.com/Diagon/#Sequence
+<https://arthursonzogni.com/Diagon/#Sequence>
 
 ```goat { class="w-40" }
 ┌─────┐       ┌───┐
@@ -194,10 +189,9 @@ https://arthursonzogni.com/Diagon/#Sequence
 
 ```
 
-
 ### Flowchart
 
-https://arthursonzogni.com/Diagon/#Flowchart
+<https://arthursonzogni.com/Diagon/#Flowchart>
 
 ```goat
    _________________                                                              
@@ -240,10 +234,9 @@ https://arthursonzogni.com/Diagon/#Flowchart
 
 ```
 
-
 ### Table
 
-https://arthursonzogni.com/Diagon/#Table
+<https://arthursonzogni.com/Diagon/#Table>
 
 ```goat { class="w-80 dark-blue" }
 ┌────────────────────────────────────────────────┐
@@ -272,6 +265,3 @@ https://arthursonzogni.com/Diagon/#Table
 │LITERAL    = """" character { character } """" .│
 └────────────────────────────────────────────────┘
 ```
-
-
-

@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,7 +29,10 @@ import (
 	"time"
 
 	"github.com/gohugoio/hugo/common/collections"
+	"github.com/gohugoio/hugo/common/herrors"
 	"github.com/gohugoio/hugo/common/hexec"
+	"github.com/gohugoio/hugo/common/loggers"
+	"github.com/gohugoio/hugo/config"
 
 	hglob "github.com/gohugoio/hugo/hugofs/glob"
 
@@ -39,15 +42,9 @@ import (
 
 	"github.com/gohugoio/hugo/hugofs/files"
 
-	"github.com/gohugoio/hugo/common/loggers"
-
-	"github.com/gohugoio/hugo/config"
-
-	"github.com/rogpeppe/go-internal/module"
+	"golang.org/x/mod/module"
 
 	"github.com/gohugoio/hugo/common/hugio"
-
-	"errors"
 
 	"github.com/spf13/afero"
 )
@@ -81,24 +78,9 @@ func NewClient(cfg ClientConfig) *Client {
 		goModFilename = n
 	}
 
-	var env []string
-	mcfg := cfg.ModuleConfig
-
-	config.SetEnvVars(&env,
-		"PWD", cfg.WorkingDir,
-		"GO111MODULE", "on",
-		"GOPROXY", mcfg.Proxy,
-		"GOPRIVATE", mcfg.Private,
-		"GONOPROXY", mcfg.NoProxy,
-		"GOPATH", cfg.CacheDir,
-		"GOWORK", mcfg.Workspace, // Requires Go 1.18, see https://tip.golang.org/doc/go1.18
-		// GOCACHE was introduced in Go 1.15. This matches the location derived from GOPATH above.
-		"GOCACHE", filepath.Join(cfg.CacheDir, "pkg", "mod"),
-	)
-
 	logger := cfg.Logger
 	if logger == nil {
-		logger = loggers.NewWarningLogger()
+		logger = loggers.NewDefault()
 	}
 
 	var noVendor glob.Glob
@@ -111,8 +93,8 @@ func NewClient(cfg ClientConfig) *Client {
 		ccfg:              cfg,
 		logger:            logger,
 		noVendor:          noVendor,
-		moduleConfig:      mcfg,
-		environ:           env,
+		moduleConfig:      cfg.ModuleConfig,
+		environ:           cfg.toEnv(),
 		GoModulesFilename: goModFilename,
 	}
 }
@@ -143,7 +125,7 @@ type Client struct {
 	goBinaryStatus goBinaryStatus
 }
 
-// Graph writes a module dependenchy graph to the given writer.
+// Graph writes a module dependency graph to the given writer.
 func (c *Client) Graph(w io.Writer) error {
 	mc, coll := c.collect(true)
 	if coll.err != nil {
@@ -154,10 +136,6 @@ func (c *Client) Graph(w io.Writer) error {
 			continue
 		}
 
-		prefix := ""
-		if module.Disabled() {
-			prefix = "DISABLED "
-		}
 		dep := pathVersion(module.Owner()) + " " + pathVersion(module)
 		if replace := module.Replace(); replace != nil {
 			if replace.Version() != "" {
@@ -167,7 +145,7 @@ func (c *Client) Graph(w io.Writer) error {
 				dep += " => " + replace.Dir()
 			}
 		}
-		fmt.Fprintln(w, prefix+dep)
+		fmt.Fprintln(w, dep)
 	}
 
 	return nil
@@ -193,7 +171,8 @@ func (c *Client) Tidy() error {
 //
 // We, by default, use the /_vendor folder first, if found. To disable,
 // run with
-//    hugo --ignoreVendorPaths=".*"
+//
+//	hugo --ignoreVendorPaths=".*"
 //
 // Given a module tree, Hugo will pick the first module for a given path,
 // meaning that if the top-level module is vendored, that will be the full
@@ -203,7 +182,7 @@ func (c *Client) Vendor() error {
 	if err := c.rmVendorDir(vendorDir); err != nil {
 		return err
 	}
-	if err := c.fs.MkdirAll(vendorDir, 0755); err != nil {
+	if err := c.fs.MkdirAll(vendorDir, 0o755); err != nil {
 		return err
 	}
 
@@ -264,7 +243,7 @@ func (c *Client) Vendor() error {
 			} else {
 				targetDir := filepath.Dir(targetFilename)
 
-				if err := c.fs.MkdirAll(targetDir, 0755); err != nil {
+				if err := c.fs.MkdirAll(targetDir, 0o755); err != nil {
 					return fmt.Errorf("failed to make target dir: %w", err)
 				}
 
@@ -292,12 +271,14 @@ func (c *Client) Vendor() error {
 			}
 		}
 
-		// Also include any theme.toml or config.* files in the root.
+		// Also include any theme.toml or config.* or hugo.* files in the root.
 		configFiles, _ := afero.Glob(c.fs, filepath.Join(dir, "config.*"))
+		configFiles2, _ := afero.Glob(c.fs, filepath.Join(dir, "hugo.*"))
+		configFiles = append(configFiles, configFiles2...)
 		configFiles = append(configFiles, filepath.Join(dir, "theme.toml"))
 		for _, configFile := range configFiles {
 			if err := hugio.CopyFile(c.fs, configFile, filepath.Join(vendorDir, t.Path(), filepath.Base(configFile))); err != nil {
-				if !os.IsNotExist(err) {
+				if !herrors.IsNotExist(err) {
 					return err
 				}
 			}
@@ -305,7 +286,7 @@ func (c *Client) Vendor() error {
 	}
 
 	if modulesContent.Len() > 0 {
-		if err := afero.WriteFile(c.fs, filepath.Join(vendorDir, vendorModulesFilename), modulesContent.Bytes(), 0666); err != nil {
+		if err := afero.WriteFile(c.fs, filepath.Join(vendorDir, vendorModulesFilename), modulesContent.Bytes(), 0o666); err != nil {
 			return err
 		}
 	}
@@ -320,14 +301,33 @@ func (c *Client) Get(args ...string) error {
 		patch := update && (args[0] == "-u=patch") //
 
 		// We need to be explicit about the modules to get.
-		for _, m := range c.moduleConfig.Imports {
-			if !isProbablyModule(m.Path) {
-				// Skip themes/components stored below /themes etc.
-				// There may be false positives in the above, but those
-				// should be rare, and they will fail below with an
-				// "cannot find module providing ..." message.
-				continue
+		var modules []string
+		// Update all active modules if the -u flag presents.
+		if update {
+			mc, coll := c.collect(true)
+			if coll.err != nil {
+				return coll.err
 			}
+			for _, m := range mc.AllModules {
+				if m.Owner() == nil || !isProbablyModule(m.Path()) {
+					continue
+				}
+				modules = append(modules, m.Path())
+			}
+		} else {
+			for _, m := range c.moduleConfig.Imports {
+				if !isProbablyModule(m.Path) {
+					// Skip themes/components stored below /themes etc.
+					// There may be false positives in the above, but those
+					// should be rare, and they will fail below with an
+					// "cannot find module providing ..." message.
+					continue
+				}
+				modules = append(modules, m.Path)
+			}
+		}
+
+		for _, m := range modules {
 			var args []string
 
 			if update && !patch {
@@ -335,7 +335,7 @@ func (c *Client) Get(args ...string) error {
 			} else if update && patch {
 				args = append(args, "-u=patch")
 			}
-			args = append(args, m.Path)
+			args = append(args, m)
 
 			if err := c.get(args...); err != nil {
 				return err
@@ -349,19 +349,7 @@ func (c *Client) Get(args ...string) error {
 }
 
 func (c *Client) get(args ...string) error {
-	var hasD bool
-	for _, arg := range args {
-		if arg == "-d" {
-			hasD = true
-			break
-		}
-	}
-	if !hasD {
-		// go get without the -d flag does not make sense to us, as
-		// it will try to build and install go packages.
-		args = append([]string{"-d"}, args...)
-	}
-	if err := c.runGo(context.Background(), c.logger.Out(), append([]string{"get"}, args...)...); err != nil {
+	if err := c.runGo(context.Background(), c.logger.StdOut(), append([]string{"get"}, args...)...); err != nil {
 		return fmt.Errorf("failed to get %q: %w", args, err)
 	}
 	return nil
@@ -371,7 +359,7 @@ func (c *Client) get(args ...string) error {
 // If path is empty, Go will try to guess.
 // If this succeeds, this project will be marked as Go Module.
 func (c *Client) Init(path string) error {
-	err := c.runGo(context.Background(), c.logger.Out(), "mod", "init", path)
+	err := c.runGo(context.Background(), c.logger.StdOut(), "mod", "init", path)
 	if err != nil {
 		return fmt.Errorf("failed to init modules: %w", err)
 	}
@@ -432,16 +420,16 @@ func (c *Client) Clean(pattern string) error {
 		if g != nil && !g.Match(m.Path) {
 			continue
 		}
-		_, err = hugofs.MakeReadableAndRemoveAllModulePkgDir(c.fs, m.Dir)
+		dirCount, err := hugofs.MakeReadableAndRemoveAllModulePkgDir(c.fs, m.Dir)
 		if err == nil {
-			c.logger.Printf("hugo: cleaned module cache for %q", m.Path)
+			c.logger.Printf("hugo: removed %d dirs in module cache for %q", dirCount, m.Path)
 		}
 	}
 	return err
 }
 
 func (c *Client) runVerify() error {
-	return c.runGo(context.Background(), ioutil.Discard, "mod", "verify")
+	return c.runGo(context.Background(), io.Discard, "mod", "verify")
 }
 
 func isProbablyModule(path string) bool {
@@ -454,9 +442,9 @@ func (c *Client) listGoMods() (goModules, error) {
 	}
 
 	downloadModules := func(modules ...string) error {
-		args := []string{"mod", "download"}
+		args := []string{"mod", "download", "-modcacherw"}
 		args = append(args, modules...)
-		out := ioutil.Discard
+		out := io.Discard
 		err := c.runGo(context.Background(), out, args...)
 		if err != nil {
 			return fmt.Errorf("failed to download modules: %w", err)
@@ -541,7 +529,7 @@ func (c *Client) rewriteGoMod(name string, isGoMod map[string]bool) error {
 		return err
 	}
 	if data != nil {
-		if err := afero.WriteFile(c.fs, filepath.Join(c.ccfg.WorkingDir, name), data, 0666); err != nil {
+		if err := afero.WriteFile(c.fs, filepath.Join(c.ccfg.WorkingDir, name), data, 0o666); err != nil {
 			return err
 		}
 	}
@@ -560,7 +548,7 @@ func (c *Client) rewriteGoModRewrite(name string, isGoMod map[string]bool) ([]by
 	b := &bytes.Buffer{}
 	f, err := c.fs.Open(filepath.Join(c.ccfg.WorkingDir, name))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if herrors.IsNotExist(err) {
 			// It's been deleted.
 			return nil, nil
 		}
@@ -619,7 +607,8 @@ func (c *Client) rmVendorDir(vendorDir string) error {
 func (c *Client) runGo(
 	ctx context.Context,
 	stdout io.Writer,
-	args ...string) error {
+	args ...string,
+) error {
 	if c.goBinaryStatus != 0 {
 		return nil
 	}
@@ -628,7 +617,7 @@ func (c *Client) runGo(
 
 	argsv := collections.StringSliceToInterfaceSlice(args)
 	argsv = append(argsv, hexec.WithEnviron(c.environ))
-	argsv = append(argsv, hexec.WithStderr(io.MultiWriter(stderr, os.Stderr)))
+	argsv = append(argsv, hexec.WithStderr(goOutputReplacerWriter{w: io.MultiWriter(stderr, os.Stderr)}))
 	argsv = append(argsv, hexec.WithStdout(stdout))
 	argsv = append(argsv, hexec.WithDir(c.ccfg.WorkingDir))
 	argsv = append(argsv, hexec.WithContext(ctx))
@@ -672,6 +661,24 @@ If you then run 'hugo mod graph' it should resolve itself to the most recent ver
 	}
 
 	return nil
+}
+
+var goOutputReplacer = strings.NewReplacer(
+	"go: to add module requirements and sums:", "hugo: to add module requirements and sums:",
+	"go mod tidy", "hugo mod tidy",
+)
+
+type goOutputReplacerWriter struct {
+	w io.Writer
+}
+
+func (w goOutputReplacerWriter) Write(p []byte) (n int, err error) {
+	s := goOutputReplacer.Replace(string(p))
+	_, err = w.w.Write([]byte(s))
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func (c *Client) tidy(mods Modules, goModOnly bool) error {
@@ -737,11 +744,17 @@ type ClientConfig struct {
 	// This can be nil.
 	IgnoreVendor glob.Glob
 
+	// Ignore any module not found errors.
+	IgnoreModuleDoesNotExist bool
+
 	// Absolute path to the project dir.
 	WorkingDir string
 
 	// Absolute path to the project's themes dir.
 	ThemesDir string
+
+	// The publish dir.
+	PublishDir string
 
 	// Eg. "production"
 	Environment string
@@ -754,6 +767,37 @@ type ClientConfig struct {
 
 func (c ClientConfig) shouldIgnoreVendor(path string) bool {
 	return c.IgnoreVendor != nil && c.IgnoreVendor.Match(path)
+}
+
+func (cfg ClientConfig) toEnv() []string {
+	mcfg := cfg.ModuleConfig
+	var env []string
+	keyVals := []string{
+		"PWD", cfg.WorkingDir,
+		"GO111MODULE", "on",
+		"GOPATH", cfg.CacheDir,
+		"GOWORK", mcfg.Workspace, // Requires Go 1.18, see https://tip.golang.org/doc/go1.18
+		// GOCACHE was introduced in Go 1.15. This matches the location derived from GOPATH above.
+		"GOCACHE", filepath.Join(cfg.CacheDir, "pkg", "mod"),
+	}
+
+	if mcfg.Proxy != "" {
+		keyVals = append(keyVals, "GOPROXY", mcfg.Proxy)
+	}
+	if mcfg.Private != "" {
+		keyVals = append(keyVals, "GOPRIVATE", mcfg.Private)
+	}
+	if mcfg.NoProxy != "" {
+		keyVals = append(keyVals, "GONOPROXY", mcfg.NoProxy)
+	}
+	if mcfg.Auth != "" {
+		// GOAUTH was introduced in Go 1.24, see https://tip.golang.org/doc/go1.24.
+		keyVals = append(keyVals, "GOAUTH", mcfg.Auth)
+	}
+
+	config.SetEnvVars(&env, keyVals...)
+
+	return env
 }
 
 type goBinaryStatus int
