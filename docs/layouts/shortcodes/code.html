@@ -1,26 +1,38 @@
-{{ $file := .Get "file" }}
-{{ $codeLang := "" }}
-{{ $suffix := findRE "(\\.[^.]+)$" $file 1 }}
-{{ with $suffix }}
-{{ $codeLang = (index . 0 | strings.TrimPrefix ".") }}
-{{ end }}
-{{ with .Get "codeLang" }}{{ $codeLang = . }}{{ end }}
-{{ if eq $codeLang "html" }}
-{{ $codeLang = "go-html-template" }}
-{{ end }}
-<div class="code relative" id="{{ $file | urlize }}">
-	{{- with $file -}}
-		<div class="filename san-serif f6 dib lh-solid pl2 pv2">{{ . }}</div>
-	{{- end -}}
+{{- $codeLang := or (.Get "lang") "" }}
+<div
+  x-data
+  class="shortcode-code font-mono not-prose relative mt-6 mb-8 border-1 border-gray-200 dark:border-gray-800 bg-light dark:bg-dark">
+  {{ if (.Get "copy") }}
+    <svg
+      class="absolute right-2 top-2 z-30 text-blue-600 hover:text-blue-500 cursor-pointer w-6 h-6"
+      @click="$copy($refs.code)">
+      <use href="#icon--copy"></use>
+    </svg>
+  {{ end }}
+  {{- with .Get "file" -}}
+    {{- if not $codeLang }}
+      {{- $ext := strings.TrimPrefix "." (path.Ext .) }}
+      {{- $codeLang = cond (eq $ext "html") "go-html-template" $ext }}
+    {{- end }}
+    <div
+      class="san-serif text-sm inline-block leading-none pl-2 py-3 bg-gray-300 dark:bg-slate-700 dark: w-full select-none
+">
+      {{ . }}
+    </div>
+  {{- end -}}
 
-	{{ if ne (.Get "copy") "false" }}
-		<button class="needs-js copy bg-accent-color-dark f6 absolute top-0 right-0 lh-solid hover-bg-primary-color-dark bn white ph3 pv2" title="Copy this code to your clipboard." data-clipboard-action="copy" aria-label="copy button">
-		</button>
-		{{/* Functionality located within filesaver.js The copy here is located in the css with .copy class so it can be replaced with JS on success */}}
-	{{ end }}
-	<div class="code-copy-content nt3" {{ with .Get "download" }}id="{{ . }}"{{ end }}>
-		{{ $inner := trim .Inner "\n" | safeHTML }}
-		{{ if .Get "nocode" }}{{ $inner }}{{ else }}{{ with $codeLang }}{{ highlight $inner . "" }}{{ else }}<pre><code>{{ $inner }}</code></pre>{{ end }}{{ end }}
-	</div>
 
+  <div class="" x-ref="code">
+    {{ $inner := trim .Inner "\n" | safeHTML }}
+    {{ if .Get "nocode" }}
+      {{ $inner }}
+    {{ else }}
+      {{ with $codeLang }}
+        {{ highlight $inner . "" }}
+      {{ else }}
+        <pre class="overflow-x-auto p-2 w-[93%]"><code>{{ $inner }}</code>
+        </pre>
+      {{ end }}
+    {{ end }}
+  </div>
 </div>

@@ -16,6 +16,7 @@ package compare
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"time"
@@ -40,25 +41,25 @@ type Namespace struct {
 	caseInsensitive bool
 }
 
-// Default checks whether a given value is set and returns a default value if it
+// Default checks whether a givenv is set and returns the default value defaultv if it
 // is not.  "Set" in this context means non-zero for numeric types and times;
 // non-zero length for strings, arrays, slices, and maps;
 // any boolean or struct value; or non-nil for any other types.
-func (*Namespace) Default(dflt any, given ...any) (any, error) {
+func (*Namespace) Default(defaultv any, givenv ...any) (any, error) {
 	// given is variadic because the following construct will not pass a piped
 	// argument when the key is missing:  {{ index . "key" | default "foo" }}
 	// The Go template will complain that we got 1 argument when we expected 2.
 
-	if len(given) == 0 {
-		return dflt, nil
+	if len(givenv) == 0 {
+		return defaultv, nil
 	}
-	if len(given) != 1 {
-		return nil, fmt.Errorf("wrong number of args for default: want 2 got %d", len(given)+1)
+	if len(givenv) != 1 {
+		return nil, fmt.Errorf("wrong number of args for default: want 2 got %d", len(givenv)+1)
 	}
 
-	g := reflect.ValueOf(given[0])
+	g := reflect.ValueOf(givenv[0])
 	if !g.IsValid() {
-		return dflt, nil
+		return defaultv, nil
 	}
 
 	set := false
@@ -77,7 +78,7 @@ func (*Namespace) Default(dflt any, given ...any) (any, error) {
 	case reflect.Complex64, reflect.Complex128:
 		set = g.Complex() != 0
 	case reflect.Struct:
-		switch actual := given[0].(type) {
+		switch actual := givenv[0].(type) {
 		case time.Time:
 			set = !actual.IsZero()
 		default:
@@ -88,10 +89,10 @@ func (*Namespace) Default(dflt any, given ...any) (any, error) {
 	}
 
 	if set {
-		return given[0], nil
+		return givenv[0], nil
 	}
 
-	return dflt, nil
+	return defaultv, nil
 }
 
 // Eq returns the boolean truth of arg1 == arg2 || arg1 == arg3 || arg1 == arg4.
@@ -116,7 +117,12 @@ func (n *Namespace) Eq(first any, others ...any) bool {
 		case reflect.Float32, reflect.Float64:
 			return vv.Float()
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			return vv.Uint()
+			i := vv.Uint()
+			// If it can fit in an int, convert it.
+			if i <= math.MaxInt64 {
+				return int64(i)
+			}
+			return i
 		case reflect.String:
 			return vv.String()
 		default:
@@ -196,7 +202,7 @@ func (n *Namespace) Le(first any, others ...any) bool {
 	return true
 }
 
-// Lt returns the boolean truth of arg1 < arg2 && arg1 < arg3 && arg1 < arg4.
+// LtCollate returns the boolean truth of arg1 < arg2 && arg1 < arg3 && arg1 < arg4.
 // The provided collator will be used for string comparisons.
 // This is for internal use.
 func (n *Namespace) LtCollate(collator *langs.Collator, first any, others ...any) bool {
@@ -223,16 +229,27 @@ func (n *Namespace) checkComparisonArgCount(min int, others ...any) bool {
 }
 
 // Conditional can be used as a ternary operator.
-// It returns a if condition, else b.
-func (n *Namespace) Conditional(condition bool, a, b any) any {
-	if condition {
-		return a
+//
+// It returns v1 if cond is true, else v2.
+func (n *Namespace) Conditional(cond any, v1, v2 any) any {
+	if hreflect.IsTruthful(cond) {
+		return v1
 	}
-	return b
+	return v2
 }
 
 func (ns *Namespace) compareGet(a any, b any) (float64, float64) {
 	return ns.compareGetWithCollator(nil, a, b)
+}
+
+func (ns *Namespace) compareTwoUints(a uint64, b uint64) (float64, float64) {
+	if a < b {
+		return 1, 0
+	} else if a == b {
+		return 0, 0
+	} else {
+		return 0, 1
+	}
 }
 
 func (ns *Namespace) compareGetWithCollator(collator *langs.Collator, a any, b any) (float64, float64) {
@@ -261,18 +278,29 @@ func (ns *Namespace) compareGetWithCollator(collator *langs.Collator, a any, b a
 	var left, right float64
 	var leftStr, rightStr *string
 	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
 
 	switch av.Kind() {
 	case reflect.Array, reflect.Chan, reflect.Map, reflect.Slice:
 		left = float64(av.Len())
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if hreflect.IsUint(bv.Kind()) {
+			return ns.compareTwoUints(uint64(av.Int()), bv.Uint())
+		}
 		left = float64(av.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
+		left = float64(av.Uint())
+	case reflect.Uint64:
+		if hreflect.IsUint(bv.Kind()) {
+			return ns.compareTwoUints(av.Uint(), bv.Uint())
+		}
 	case reflect.Float32, reflect.Float64:
 		left = av.Float()
 	case reflect.String:
 		var err error
 		left, err = strconv.ParseFloat(av.String(), 64)
-		if err != nil {
+		// Check if float is a special floating value and cast value as string.
+		if math.IsInf(left, 0) || math.IsNaN(left) || err != nil {
 			str := av.String()
 			leftStr = &str
 		}
@@ -287,19 +315,27 @@ func (ns *Namespace) compareGetWithCollator(collator *langs.Collator, a any, b a
 		}
 	}
 
-	bv := reflect.ValueOf(b)
-
 	switch bv.Kind() {
 	case reflect.Array, reflect.Chan, reflect.Map, reflect.Slice:
 		right = float64(bv.Len())
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if hreflect.IsUint(av.Kind()) {
+			return ns.compareTwoUints(av.Uint(), uint64(bv.Int()))
+		}
 		right = float64(bv.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
+		right = float64(bv.Uint())
+	case reflect.Uint64:
+		if hreflect.IsUint(av.Kind()) {
+			return ns.compareTwoUints(av.Uint(), bv.Uint())
+		}
 	case reflect.Float32, reflect.Float64:
 		right = bv.Float()
 	case reflect.String:
 		var err error
 		right, err = strconv.ParseFloat(bv.String(), 64)
-		if err != nil {
+		// Check if float is a special floating value and cast value as string.
+		if math.IsInf(right, 0) || math.IsNaN(right) || err != nil {
 			str := bv.String()
 			rightStr = &str
 		}

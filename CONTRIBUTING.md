@@ -1,6 +1,6 @@
-# Contributing to Hugo
+>**Note:** We would apprecitate if you hold on with any big refactorings (like renaming deprecated Go packages), mainly because of potential for extra merge work for future coming in in the near future.
 
-**Note  March 16th 2022:** We are currently very constrained on human resources to do code reviews, so we currently require any new Pull Requests to be limited to bug fixes closing an existing issue. Also, we have updated to Go 1.18, but we will currently not accept any generic rewrites, "interface{} to any" replacements and similar.
+# Contributing to Hugo
 
 We welcome contributions to Hugo of any kind including documentation, themes,
 organization, tutorials, blog posts, bug reports, issues, feature requests,
@@ -52,8 +52,6 @@ Hugo has become a fully featured static site generator, so any new functionality
 
 If it is of some complexity, the contributor is expected to maintain and support the new feature in the future (answer questions on the forum, fix any bugs etc.).
 
-It is recommended to open up a discussion on the [Hugo Forum](https://discourse.gohugo.io/) to get feedback on your idea before you begin. 
-
 Any non-trivial code change needs to update an open [issue](https://github.com/gohugoio/hugo/issues). A non-trivial code change without an issue reference with one of the labels `bug` or `enhancement` will not be merged.
 
 Note that we do not accept new features that require [CGO](https://github.com/golang/go/wiki/cgo).
@@ -95,6 +93,7 @@ Most title/subjects should have a lower-cased prefix with a colon and one whites
 * If this commit touches many packages without a common functional topic, prefix with `all:` (e.g. `all: Reformat Go code`)
 * If this is a documentation update, prefix with `docs:`.
 * If nothing of the above applies, just leave the prefix out.
+* Note that the above excludes nouns seen in other repositories, e.g. "chore:".
 
 Also, if your commit references one or more GitHub issues, always end your commit message body with *See #1234* or *Fixes #1234*.
 Replace *1234* with the GitHub issue ID. The last example will close the issue when the commit is merged into *master*.
@@ -123,8 +122,6 @@ git clone https://github.com/gohugoio/hugo.git
 cd hugo
 go install
 ```
-
->Note: Some Go tools may not be fully updated to support Go Modules yet. One example would be LiteIDE. Follow [this workaround](https://github.com/visualfc/liteide/issues/986#issuecomment-428117702) for how to continue to work with Hugo below `GOPATH`.
 
 For some convenient build and test targets, you also will want to install Mage:
 

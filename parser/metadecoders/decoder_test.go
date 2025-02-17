@@ -56,23 +56,26 @@ func TestUnmarshalXML(t *testing.T) {
 				"guid":        "https://example.com/2021/11/30/example-title/",
 				"link":        "https://example.com/2021/11/30/example-title/",
 				"pubDate":     "Tue, 30 Nov 2021 15:00:00 +0000",
-				"title":       "Example title"},
+				"title":       "Example title",
+			},
 			"language":      "en-us",
 			"lastBuildDate": "Fri, 08 Jan 2021 14:44:10 +0000",
 			"link": []any{"https://example.com/", map[string]any{
 				"-href": "https://example.com/feed.xml",
 				"-rel":  "self",
-				"-type": "application/rss+xml"}},
+				"-type": "application/rss+xml",
+			}},
 			"title": "Example feed",
-		}}
+		},
+	}
 
 	d := Default
 
 	m, err := d.Unmarshal([]byte(xmlDoc), XML)
 	c.Assert(err, qt.IsNil)
 	c.Assert(m, qt.DeepEquals, expect)
-
 }
+
 func TestUnmarshalToMap(t *testing.T) {
 	c := qt.New(t)
 
@@ -116,24 +119,32 @@ func TestUnmarshalToInterface(t *testing.T) {
 	d := Default
 
 	for i, test := range []struct {
-		data   string
+		data   []byte
 		format Format
 		expect any
 	}{
-		{`[ "Brecker", "Blake", "Redman" ]`, JSON, []any{"Brecker", "Blake", "Redman"}},
-		{`{ "a": "b" }`, JSON, expect},
-		{`#+a: b`, ORG, expect},
-		{`#+DATE: <2020-06-26 Fri>`, ORG, map[string]any{"date": "2020-06-26"}},
-		{`a = "b"`, TOML, expect},
-		{`a: "b"`, YAML, expect},
-		{`<root><a>b</a></root>`, XML, expect},
-		{`a,b,c`, CSV, [][]string{{"a", "b", "c"}}},
-		{"a: Easy!\nb:\n  c: 2\n  d: [3, 4]", YAML, map[string]any{"a": "Easy!", "b": map[string]any{"c": 2, "d": []any{3, 4}}}},
+		{[]byte(`[ "Brecker", "Blake", "Redman" ]`), JSON, []any{"Brecker", "Blake", "Redman"}},
+		{[]byte(`{ "a": "b" }`), JSON, expect},
+		{[]byte(``), JSON, map[string]any{}},
+		{[]byte(nil), JSON, map[string]any{}},
+		{[]byte(`#+a: b`), ORG, expect},
+		{[]byte("#+a: foo bar\n#+a: baz"), ORG, map[string]any{"a": []string{string("foo bar"), string("baz")}}},
+		{[]byte(`#+DATE: <2020-06-26 Fri>`), ORG, map[string]any{"date": "2020-06-26"}},
+		{[]byte(`#+LASTMOD: <2020-06-26 Fri>`), ORG, map[string]any{"lastmod": "2020-06-26"}},
+		{[]byte(`#+FILETAGS: :work:`), ORG, map[string]any{"filetags": []string{"work"}}},
+		{[]byte(`#+FILETAGS: :work:fun:`), ORG, map[string]any{"filetags": []string{"work", "fun"}}},
+		{[]byte(`#+PUBLISHDATE: <2020-06-26 Fri>`), ORG, map[string]any{"publishdate": "2020-06-26"}},
+		{[]byte(`#+EXPIRYDATE: <2020-06-26 Fri>`), ORG, map[string]any{"expirydate": "2020-06-26"}},
+		{[]byte(`a = "b"`), TOML, expect},
+		{[]byte(`a: "b"`), YAML, expect},
+		{[]byte(`<root><a>b</a></root>`), XML, expect},
+		{[]byte(`a,b,c`), CSV, [][]string{{"a", "b", "c"}}},
+		{[]byte("a: Easy!\nb:\n  c: 2\n  d: [3, 4]"), YAML, map[string]any{"a": "Easy!", "b": map[string]any{"c": 2, "d": []any{3, 4}}}},
 		// errors
-		{`a = "`, TOML, false},
+		{[]byte(`a = "`), TOML, false},
 	} {
 		msg := qt.Commentf("%d: %s", i, test.format)
-		m, err := d.Unmarshal([]byte(test.data), test.format)
+		m, err := d.Unmarshal(test.data, test.format)
 		if b, ok := test.expect.(bool); ok && !b {
 			c.Assert(err, qt.Not(qt.IsNil), msg)
 		} else {
@@ -295,5 +306,28 @@ func BenchmarkStringifyMapKeysIntegers(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		stringifyMapKeys(maps[i])
+	}
+}
+
+func BenchmarkDecodeYAMLToMap(b *testing.B) {
+	d := Default
+
+	data := []byte(`
+a:
+  v1: 32
+  v2: 43
+  v3: "foo"
+b:
+  - a
+  - b
+c: "d"
+
+`)
+
+	for i := 0; i < b.N; i++ {
+		_, err := d.UnmarshalToMap(data, YAML)
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }

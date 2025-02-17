@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/gohugoio/hugo/common/hexec"
+	"github.com/gohugoio/hugo/common/loggers"
 	"github.com/gohugoio/hugo/config/security"
 	"github.com/gohugoio/hugo/hugofs/glob"
 
@@ -49,15 +50,19 @@ github.com/gohugoio/hugoTestModules1_darwin/modh2_2@v1.4.0 github.com/gohugoio/h
 		workingDir, clean, err := htesting.CreateTempDir(hugofs.Os, fmt.Sprintf("%s-%d", modName, clientID))
 		c.Assert(err, qt.IsNil)
 		themesDir := filepath.Join(workingDir, "themes")
-		err = os.Mkdir(themesDir, 0777)
+		err = os.Mkdir(themesDir, 0o777)
+		c.Assert(err, qt.IsNil)
+		publishDir := filepath.Join(workingDir, "public")
+		err = os.Mkdir(publishDir, 0o777)
 		c.Assert(err, qt.IsNil)
 
 		ccfg := ClientConfig{
 			Fs:         hugofs.Os,
-			WorkingDir: workingDir,
 			CacheDir:   filepath.Join(workingDir, "modcache"),
+			WorkingDir: workingDir,
 			ThemesDir:  themesDir,
-			Exec:       hexec.New(security.DefaultConfig),
+			PublishDir: publishDir,
+			Exec:       hexec.New(security.DefaultConfig, "", loggers.NewDefault()),
 		}
 
 		withConfig(&ccfg)
@@ -184,7 +189,7 @@ project github.com/gohugoio/hugoTestModules1_darwin/modh2_2_2@v1.3.0+vendor
 		c.Assert(err, qt.IsNil)
 		c.Assert(dirname, qt.Equals, filepath.Join(client.ccfg.ThemesDir, "../../foo"))
 
-		dirname, err = client.createThemeDirname("../../foo", false)
+		_, err = client.createThemeDirname("../../foo", false)
 		c.Assert(err, qt.Not(qt.IsNil))
 
 		absDir := filepath.Join(client.ccfg.WorkingDir, "..", "..")
@@ -210,4 +215,43 @@ func TestGetModlineSplitter(t *testing.T) {
 
 	gosumSplitter := getModlineSplitter(false)
 	c.Assert(gosumSplitter("github.com/BurntSushi/toml v0.3.1"), qt.DeepEquals, []string{"github.com/BurntSushi/toml", "v0.3.1"})
+}
+
+func TestClientConfigToEnv(t *testing.T) {
+	c := qt.New(t)
+
+	ccfg := ClientConfig{
+		WorkingDir: "/mywork",
+		CacheDir:   "/mycache",
+	}
+
+	env := ccfg.toEnv()
+
+	c.Assert(env, qt.DeepEquals, []string{"PWD=/mywork", "GO111MODULE=on", "GOPATH=/mycache", "GOWORK=", filepath.FromSlash("GOCACHE=/mycache/pkg/mod")})
+
+	ccfg = ClientConfig{
+		WorkingDir: "/mywork",
+		CacheDir:   "/mycache",
+		ModuleConfig: Config{
+			Proxy:     "https://proxy.example.org",
+			Private:   "myprivate",
+			NoProxy:   "mynoproxy",
+			Workspace: "myworkspace",
+			Auth:      "myauth",
+		},
+	}
+
+	env = ccfg.toEnv()
+
+	c.Assert(env, qt.DeepEquals, []string{
+		"PWD=/mywork",
+		"GO111MODULE=on",
+		"GOPATH=/mycache",
+		"GOWORK=myworkspace",
+		filepath.FromSlash("GOCACHE=/mycache/pkg/mod"),
+		"GOPROXY=https://proxy.example.org",
+		"GOPRIVATE=myprivate",
+		"GONOPROXY=mynoproxy",
+		"GOAUTH=myauth",
+	})
 }

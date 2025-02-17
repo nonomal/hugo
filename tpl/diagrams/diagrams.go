@@ -1,4 +1,4 @@
-// Copyright 2022 The Hugo Authors. All rights reserved.
+// Copyright 2024 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,14 +14,7 @@
 package diagrams
 
 import (
-	"bytes"
 	"html/template"
-	"io"
-	"strings"
-
-	"github.com/bep/goat"
-	"github.com/gohugoio/hugo/deps"
-	"github.com/spf13/cast"
 )
 
 type SVGDiagram interface {
@@ -37,45 +30,4 @@ type SVGDiagram interface {
 
 	// Height returns the height of the SVG.
 	Height() int
-}
-
-type goatDiagram struct {
-	d goat.SVG
-}
-
-func (d goatDiagram) Inner() template.HTML {
-	return template.HTML(d.d.Body)
-}
-
-func (d goatDiagram) Wrapped() template.HTML {
-	return template.HTML(d.d.String())
-}
-
-func (d goatDiagram) Width() int {
-	return d.d.Width
-}
-
-func (d goatDiagram) Height() int {
-	return d.d.Height
-}
-
-type Diagrams struct {
-	d *deps.Deps
-}
-
-func (d *Diagrams) Goat(v any) SVGDiagram {
-	var r io.Reader
-
-	switch vv := v.(type) {
-	case io.Reader:
-		r = vv
-	case []byte:
-		r = bytes.NewReader(vv)
-	default:
-		r = strings.NewReader(cast.ToString(v))
-	}
-
-	return goatDiagram{
-		d: goat.BuildSVG(r),
-	}
 }
